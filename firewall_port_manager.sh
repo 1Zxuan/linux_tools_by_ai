@@ -49,89 +49,75 @@ else
     exit 1
 fi
 
+# 显示已开放端口的函数
+show_ports() {
+    if [ "$FIREWALL_TOOL" == "firewalld" ]; then
+        firewall-cmd --zone=public --list-ports
+    elif [ "$FIREWALL_TOOL" == "ufw" ]; then
+        ufw status | grep 'ALLOW' | awk '{print $2}'
+    else
+        echo "未检测到已知的防火墙管理工具 (firewalld/ufw)。请手动检查端口。"
+        exit 1
+    fi
+}
+
 # 如果操作类型是 show，显示已开放的端口
 if [ "$OPERATION" == "show" ]; then
   echo "显示已开放的端口："
-
-  # 检查系统防火墙工具，优先使用 FIREWALL_TOOL
-  if [ "$FIREWALL_TOOL" == "firewalld" ]; then
-    echo "使用 firewalld 显示已开放的端口："
-    firewall-cmd --zone=public --list-ports
-
-  # 如果没有 firewalld，检查是否安装了 iptables
-  elif [ "$FIREWALL_TOOL" == "ufw" ]; then
-    echo "使用 ufw 显示已开放的端口："
-    ufw status | grep 'ALLOW' | awk '{print $2}'
-
-  else
-    echo "未检测到已知的防火墙管理工具 (firewalld/ufw)。请手动检查端口。"
-    exit 1
-  fi
+  show_ports
   exit 0
 fi
 
 # 如果操作类型是端口号，执行开放端口的操作
-# 确保只有一个参数，即端口号
 if [[ "$OPERATION" =~ ^[0-9]+$ ]]; then
   PORT=$OPERATION
   echo "正在处理端口 $PORT ..."
 
-  # 检查系统防火墙工具，优先使用 firewalld
-  if [ "$FIREWALL_TOOL" == "firewalld" ]; then
-      # 检查端口是否已经开放
-      if firewall-cmd --zone=public --list-ports | grep -qw "$PORT/tcp"; then
-          echo "端口 $PORT 已经在 firewalld 中开放。"
-          read -p "是否关闭端口 $PORT？输入 Y 关闭，N 忽略操作: " choice
-          case "$choice" in
-            Y|y)
-                echo "正在关闭端口 $PORT ..."
+  # 检查端口是否已经开放的函数
+  check_open_port() {
+      if [ "$FIREWALL_TOOL" == "firewalld" ]; then
+          firewall-cmd --zone=public --list-ports | grep -qw "$PORT/tcp"
+      elif [ "$FIREWALL_TOOL" == "ufw" ]; then
+          ufw status | grep -qw "$PORT/tcp"
+      else
+          echo "未知防火墙工具，请手动检查端口 $PORT。"
+          exit 1
+      fi
+  }
+
+  # 检查端口是否已经开放
+  if check_open_port; then
+      echo "端口 $PORT 已经在防火墙中开放。"
+      read -p "是否关闭端口 $PORT？输入 Y 关闭，N 忽略操作: " choice
+      case "$choice" in
+        Y|y)
+            echo "正在关闭端口 $PORT ..."
+            if [ "$FIREWALL_TOOL" == "firewalld" ]; then
                 firewall-cmd --zone=public --remove-port=$PORT/tcp --permanent
                 firewall-cmd --reload
-                echo "端口 $PORT 已成功关闭。"
-                ;;
-            N|n)
-                echo "忽略关闭端口操作，保持端口 $PORT 开放。"
-                ;;
-            *)
-                echo "无效输入，跳过操作。"
-                ;;
-          esac
-      else
-          echo "检测到 firewalld，正在使用 firewalld 开放端口 $PORT ..."
+            elif [ "$FIREWALL_TOOL" == "ufw" ]; then
+                ufw deny $PORT/tcp
+            fi
+            echo "端口 $PORT 已成功关闭。"
+            ;;
+        N|n)
+            echo "保持端口 $PORT 开放。"
+            ;;
+        *)
+            echo "无效输入，跳过操作。"
+            ;;
+      esac
+  else
+      echo "端口 $PORT 未在防火墙中开放，正在开放端口 $PORT ..."
+      if [ "$FIREWALL_TOOL" == "firewalld" ]; then
           firewall-cmd --zone=public --add-port=$PORT/tcp --permanent
           firewall-cmd --reload
-          echo "端口 $PORT 已成功开放。"
-      fi
-
-  # 如果防火墙工具是 ufw（Ubuntu/Debian）
-  elif [ "$FIREWALL_TOOL" == "ufw" ]; then
-      # 检查端口是否已经开放
-      if ufw status | grep -qw "$PORT/tcp"; then
-          echo "端口 $PORT 已经在 ufw 中开放。"
-          read -p "是否关闭端口 $PORT？输入 Y 关闭，N 忽略操作: " choice
-          case "$choice" in
-            Y|y)
-                echo "正在关闭端口 $PORT ..."
-                ufw deny $PORT/tcp
-                echo "端口 $PORT 已成功关闭。"
-                ;;
-            N|n)
-                echo "忽略关闭端口操作，保持端口 $PORT 开放。"
-                ;;
-            *)
-                echo "无效输入，跳过操作。"
-                ;;
-          esac
-      else
-          echo "检测到 ufw，正在使用 ufw 开放端口 $PORT ..."
+      elif [ "$FIREWALL_TOOL" == "ufw" ]; then
           ufw allow $PORT/tcp
-          echo "端口 $PORT 已成功开放。"
       fi
-
-  else
-      echo "未检测到已知的防火墙管理工具 (firewalld/ufw)。请手动开放端口 $PORT。"
-      exit 1
+      echo "端口 $PORT 已成功开放。"
   fi
+  exit 0
 else
   # 如果输入的参数不是端口号或 "show"，则提示错误
   echo "错误: 参数无效。"
